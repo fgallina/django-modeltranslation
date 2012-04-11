@@ -10,10 +10,10 @@ Credits: heavily inspired from django-transmete sync_transmeta_db command.
 """
 from optparse import make_option
 
+from django.db import connections, transaction, DEFAULT_DB_ALIAS
 from django.conf import settings
 from django.core.management.base import BaseCommand
 from django.core.management.color import no_style
-from django.db import connection, transaction
 
 from modeltranslation.utils import build_localized_fieldname
 from modeltranslation.translator import translator
@@ -42,7 +42,12 @@ def print_missing_langs(missing_langs, field_name, model_name):
 
 
 class Command(BaseCommand):
+
     option_list = BaseCommand.option_list + (
+        make_option('--database', action='store', dest='database',
+            default=DEFAULT_DB_ALIAS, help='Nominates a database to '
+                    'sync translations fields.  Defaults to using the '
+                    '"default" database.'),
         make_option('--noinput',
             action='store_false', dest='interactive', default=True,
             help="Do NOT prompt the user for input of any kind."),
@@ -51,6 +56,9 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         """ command execution """
+        db = options.get('database')
+        connection = connections[db]
+
         self.cursor = connection.cursor()
         self.introspection = connection.introspection
 
@@ -72,7 +80,7 @@ class Command(BaseCommand):
                     execute_sql = True
                     found_missing_fields = True
                     print_missing_langs(missing_langs, field_name, model_full_name)
-                    sql_sentences = self.get_sync_sql(field_name, missing_langs, model)
+                    sql_sentences = self.get_sync_sql(connection, field_name, missing_langs, model)
                     if self.interactive:
                         execute_sql = ask_for_confirmation(sql_sentences, model_full_name)
                     if execute_sql:
@@ -100,7 +108,7 @@ class Command(BaseCommand):
             if build_localized_fieldname(field_name, lang_code) not in db_table_fields:
                 yield lang_code
 
-    def get_sync_sql(self, field_name, missing_langs, model):
+    def get_sync_sql(self, connection, field_name, missing_langs, model):
         """ returns SQL needed for sync schema for a new translatable field """
         qn = connection.ops.quote_name
         style = no_style()
@@ -109,7 +117,7 @@ class Command(BaseCommand):
         for lang in missing_langs:
             new_field = build_localized_fieldname(field_name, lang)
             f = model._meta.get_field(new_field)
-            col_type = f.db_type()
+            col_type = f.db_type(connection=connection)
             field_sql = [style.SQL_FIELD(qn(f.column)), style.SQL_COLTYPE(col_type)]
             # column creation
             sql_output.append("ALTER TABLE %s ADD COLUMN %s;" % (qn(db_table), ' '.join(field_sql)))
